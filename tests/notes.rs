@@ -28,6 +28,63 @@ mod notes {
         Obx::from_command("notes view from-another-vault --vault=secondary").assert_success();
     }
 
+    mod list {
+        use super::*;
+
+        #[test]
+        fn prints_all_notes_in_current_vault() {
+            Obx::from_command("notes list").assert_stdout(indoc! { r"
+                ┌───────────────────────┐
+                │ Note                  │
+                ├───────────────────────┤
+                │ complex-note.md       │
+                │ empty-note.md         │
+                │ folder/child-note.md  │
+                │ html.md               │
+                │ link-types.md         │
+                │ simple-note.md        │
+                │ table.md              │
+                │ with-fm-properties.md │
+                └───────────────────────┘
+            " });
+        }
+
+        #[test]
+        fn prints_notes_as_json() {
+            let expected = "[\"complex-note.md\",\"empty-note.md\",\"folder/child-note.md\",\"html.md\",\"link-types.md\",\"simple-note.md\",\"table.md\",\"with-fm-properties.md\"]\n";
+
+            Obx::from_command("notes list -f json").assert_stdout(expected);
+        }
+
+        #[test]
+        fn limits_to_specified_folder() {
+            Obx::from_command("notes list folder").assert_stdout(indoc! { r"
+                ┌──────────────────────┐
+                │ Note                 │
+                ├──────────────────────┤
+                │ folder/child-note.md │
+                └──────────────────────┘
+            " });
+        }
+
+        #[test]
+        fn supports_selecting_other_vaults() {
+            Obx::from_command("notes list --vault=secondary").assert_stdout(indoc! { r"
+                ┌───────────────────────┐
+                │ Note                  │
+                ├───────────────────────┤
+                │ from-another-vault.md │
+                └───────────────────────┘
+            " });
+        }
+
+        #[test]
+        fn errors_when_folder_missing() {
+            Obx::from_command("notes list missing-folder")
+                .assert_stderr("Folder `missing-folder` not found in vault `main`\n");
+        }
+    }
+
     mod view {
         use super::*;
 

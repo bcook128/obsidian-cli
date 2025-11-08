@@ -1,10 +1,8 @@
 use crate::cli_config;
 use anyhow::Context;
 use atty::{is, Stream};
-use libobsidian::{ObsidianNote, Properties};
 use std::{
     ffi::OsStr,
-    fs,
     path::{Path, PathBuf},
 };
 

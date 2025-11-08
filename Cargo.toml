@@ -23,6 +23,7 @@ serde = "1.0.204"
 serde_json = { version = "1.0.122", features = ["preserve_order"] }
 serde_yaml = { version = "0.9.34" }
 tabled = "0.16.0"
+walkdir = "2.5.0"
 libobsidian = "*"
 
 [patch.crates-io]
