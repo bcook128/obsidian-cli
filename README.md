@@ -105,6 +105,19 @@ Commands:
 > obx vaults path
 ```
 
+## Browse (TUI)
+
+Launch an interactive view of your current vault with split panes for folders, notes, and a Markdown preview:
+
+```
+Usage: obx browse [OPTIONS]
+
+Options:
+  -v, --vault <VAULT>  Override the active vault by name
+```
+
+Inside the TUI you can navigate with the arrow keys, fold and unfold folders with ← →, switch panels with <kbd>Tab</kbd>, and quit with <kbd>q</kbd>.
+
 
 ### Roadmap
 - [ ] Fuzzy searching of files within vaults

@@ -6,6 +6,7 @@ pub mod app_settings;
 pub mod cli_config;
 pub mod commands;
 pub mod formats;
+pub mod tui;
 pub mod util;
 
 #[derive(Parser)]
@@ -28,6 +29,9 @@ enum Commands {
 
     /// Commands for managing config
     Config(commands::config::ConfigCommand),
+
+    /// Launch the interactive vault browser
+    Browse(commands::browse::BrowseCommand),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -38,6 +42,7 @@ fn main() -> anyhow::Result<()> {
         Some(Commands::Notes(args)) => commands::notes::entry(args),
         Some(Commands::Vaults(args)) => commands::vaults::entry(args),
         Some(Commands::Config(args)) => commands::config::entry(args),
+        Some(Commands::Browse(args)) => commands::browse::entry(args),
         None => {
             todo!("Needs a sub-command");
         }
