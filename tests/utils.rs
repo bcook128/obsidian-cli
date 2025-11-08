@@ -48,7 +48,7 @@ impl Obx {
             .with_config_file(&initial_cfg_file)
     }
 
-    pub fn spawn_interactive(self, timeout: Option<u64>) -> anyhow::Result<PtyReplSession> {
+    pub fn spawn_interactive(&self, timeout: Option<u64>) -> anyhow::Result<PtyReplSession> {
         // Take our usual cmd but instead of asserting on it, convert it into
         // a string, then split it into the `cd $dir` and `cmd $args` parts
         let cmd_str = &format!("{:?}", self.cmd);

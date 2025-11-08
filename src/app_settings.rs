@@ -1,4 +1,6 @@
 use anyhow::Context;
+#[cfg(target_os = "linux")]
+use etcetera::BaseStrategy;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, path::PathBuf, sync::OnceLock};
 

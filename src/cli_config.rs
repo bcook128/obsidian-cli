@@ -131,7 +131,9 @@ pub fn create_from_settings() -> anyhow::Result<Config> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
     use super::*;
+    #[cfg(target_os = "macos")]
     use regex::Regex;
 
     #[test]

@@ -3,13 +3,18 @@ use crate::{
     formats::{yaml_to_json_value, yaml_to_string_map},
     util::{get_current_vault, resolve_note_path, should_enable_interactivity, CommandResult},
 };
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use atty::{isnt, Stream};
 use clap::{Args, Subcommand};
 use dialoguer::Confirm;
 use libobsidian::{ObsidianNote, Properties};
-use std::{env, fs, io, path::PathBuf, process};
+use std::{
+    env, fs, io,
+    path::{Path, PathBuf},
+    process,
+};
 use tabled::{builder::Builder, settings::Style};
+use walkdir::WalkDir;
 
 #[derive(Args, Debug, Clone)]
 #[command(args_conflicts_with_subcommands = true)]
@@ -46,6 +51,8 @@ enum Subcommands {
     // Render(RenderArgs),
     /// View the properties of a note
     Properties(PropertiesArgs),
+    /// List notes within a vault
+    List(ListArgs),
     // Convert the note to a range of formats
     // Export(ExportArgs),
 
@@ -60,6 +67,15 @@ struct NoteArgs {
 
     #[arg(long, short = 'v', global = true)]
     vault: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+struct ListArgs {
+    #[arg(help = "Optional folder within the vault to list notes from")]
+    folder: Option<String>,
+
+    #[arg(long, short = 'f', default_value = "pretty")]
+    format: ListFormatOption,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -112,6 +128,12 @@ struct RenderArgs {
 enum ExportFormatOption {
     Pretty,
     Html,
+    Json,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum ListFormatOption {
+    Pretty,
     Json,
 }
 
@@ -184,6 +206,10 @@ pub fn entry(cmd: &NotesCommand) -> anyhow::Result<Option<String>> {
             let args = EnrichedNoteArgs::from_args(common)?;
             properties(args, format)
         }
+        Some(Subcommands::List(list_args)) => {
+            let args = EnrichedListArgs::from_args(list_args, cmd.vault.clone())?;
+            list(args, &list_args.format)
+        }
         // Some(Subcommands::Export(ExportArgs { common, .. })) => {
         //     let args = EnrichedNoteArgs::from_args(common)?;
         //     export(args)
@@ -223,11 +249,103 @@ impl EnrichedNoteArgs {
     }
 }
 
+struct EnrichedListArgs {
+    vault: cli_config::Vault,
+    base_path: PathBuf,
+}
+
+impl EnrichedListArgs {
+    fn from_args(args: &ListArgs, vault_override: Option<String>) -> anyhow::Result<Self> {
+        let vault = get_current_vault(vault_override)?;
+
+        let base_path = if let Some(folder) = &args.folder {
+            let folder_path = vault.path.join(folder);
+
+            if !folder_path.exists() {
+                bail!("Folder `{}` not found in vault `{}`", folder, vault.name);
+            }
+
+            if !folder_path.is_dir() {
+                bail!(
+                    "Path `{}` within vault `{}` is not a directory",
+                    folder,
+                    vault.name
+                );
+            }
+
+            folder_path
+        } else {
+            vault.path.clone()
+        };
+
+        Ok(Self { vault, base_path })
+    }
+}
+
 fn view(note: EnrichedNoteArgs) -> CommandResult {
     let note_content = fs::read_to_string(note.note_path.clone())
         .with_context(|| format!("Could not read note `{}`", note.note_file))?;
 
     Ok(Some(note_content))
+}
+
+fn list(args: EnrichedListArgs, format: &ListFormatOption) -> CommandResult {
+    let notes = collect_notes(&args.base_path, &args.vault.path)?;
+
+    let formatted = match format {
+        ListFormatOption::Json => serde_json::to_string(&notes)?,
+        ListFormatOption::Pretty => format_note_table(&notes),
+    };
+
+    Ok(Some(formatted))
+}
+
+fn collect_notes(base_path: &Path, vault_path: &Path) -> anyhow::Result<Vec<String>> {
+    let mut notes = Vec::new();
+
+    for entry in WalkDir::new(base_path) {
+        let entry = entry?;
+
+        if entry.file_type().is_file()
+            && entry
+                .path()
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("md"))
+                .unwrap_or(false)
+        {
+            let relative_path = entry.path().strip_prefix(vault_path).with_context(|| {
+                format!(
+                    "Could not determine note path relative to vault: {}",
+                    entry.path().display()
+                )
+            })?;
+
+            let normalized = relative_path
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR_STR, "/");
+            notes.push(normalized);
+        }
+    }
+
+    notes.sort();
+
+    Ok(notes)
+}
+
+fn format_note_table(notes: &[String]) -> String {
+    let mut builder = Builder::new();
+
+    for note in notes {
+        builder.push_record([note.clone()]);
+    }
+
+    builder.insert_record(0, vec!["Note"]);
+
+    let mut table = builder.build();
+    table.with(Style::sharp());
+
+    format!("{table}")
 }
 
 fn obsidian_note_uri(note_path: &PathBuf, vault: String) -> String {
