@@ -5,7 +5,11 @@ pub type Properties = serde_yaml::Value;
 #[derive(Debug, PartialEq, Eq)]
 pub struct ObsidianNote {
     pub file_path: PathBuf,
-    pub file_contents: String,
+    /// The raw contents of the underlying markdown file, including any
+    /// frontmatter. This field is optional to allow callers to construct an
+    /// `ObsidianNote` without needing to have read the original file from
+    /// disk (for example when creating a new note in-memory).
+    pub file_raw_contents: Option<String>,
     pub file_body: String,
     pub properties: Option<Properties>,
 }
@@ -13,8 +17,7 @@ pub struct ObsidianNote {
 impl ObsidianNote {
     pub fn read_from_path(file_path: &PathBuf) -> anyhow::Result<Self> {
         let file_contents = fs::read_to_string(file_path)?;
-        let note = Self::parse(file_path, file_contents)?;
-        Ok(note)
+        Self::parse(file_path, file_contents)
     }
 
     pub fn parse(file_path: &PathBuf, file_contents: String) -> anyhow::Result<Self> {
@@ -33,8 +36,8 @@ impl ObsidianNote {
 
         let note = Self {
             file_path: file_path.clone(),
-            file_body: file_body.unwrap_or(String::new()),
-            file_contents,
+            file_body: file_body.unwrap_or_default(),
+            file_raw_contents: Some(file_contents),
             properties: frontmatter,
         };
 
@@ -95,6 +98,21 @@ mod tests {
                 .into_iter()
             )))
         );
+    }
+
+    #[test]
+    fn parse_populates_file_raw_contents() {
+        let note_content = indoc! {r"
+            ---
+            some-property: foo
+            ---
+            The note body
+        "};
+
+        let note =
+            ObsidianNote::parse(&PathBuf::from("a-note.md"), note_content.to_string()).unwrap();
+
+        assert_eq!(note.file_raw_contents, Some(note_content.to_string()));
     }
 
     #[test]
