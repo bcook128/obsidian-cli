@@ -6,6 +6,7 @@ pub mod app_settings;
 pub mod cli_config;
 pub mod commands;
 pub mod formats;
+pub mod theme;
 pub mod tui;
 pub mod util;
 

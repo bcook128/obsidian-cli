@@ -1,4 +1,4 @@
-use crate::app_settings;
+use crate::{app_settings, theme::ThemeName};
 use anyhow::{bail, Context};
 use etcetera::BaseStrategy;
 use serde::{Deserialize, Serialize};
@@ -19,6 +19,10 @@ pub struct Vault {
 pub struct Config {
     pub current_vault: String,
     pub vaults: Vec<Vault>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor: Option<String>,
+    #[serde(default)]
+    pub theme: ThemeName,
 }
 
 fn get_config_dir() -> &'static PathBuf {
@@ -70,6 +74,18 @@ pub fn write(new_config: &Config) -> anyhow::Result<()> {
         .with_context(|| format!("failed to write to config file {}", config_path.display()))
 }
 
+pub fn resolve_editor() -> anyhow::Result<String> {
+    if let Ok(config) = read() {
+        if let Some(editor) = &config.editor {
+            if !editor.trim().is_empty() {
+                return Ok(editor.clone());
+            }
+        }
+    }
+
+    env::var("EDITOR").context("$EDITOR not found")
+}
+
 impl TryFrom<app_settings::Settings> for Config {
     type Error = anyhow::Error;
 
@@ -101,6 +117,8 @@ impl TryFrom<app_settings::Settings> for Config {
                 let config = Self {
                     current_vault: vaults[0].clone().name,
                     vaults,
+                    editor: None,
+                    theme: ThemeName::default(),
                 };
 
                 Ok(config)

@@ -9,7 +9,7 @@ use clap::{Args, Subcommand};
 use dialoguer::Confirm;
 use libobsidian::{ObsidianNote, Properties};
 use std::{
-    env, fs, io,
+    fs, io,
     path::{Path, PathBuf},
     process,
 };
@@ -421,12 +421,12 @@ fn create(note: EnrichedNoteArgs, stdin: Option<String>) -> CommandResult {
 
     write_note(&obsidian_note)?;
 
-    let editor = env::var("EDITOR").context("$EDITOR not found")?;
+    let editor = cli_config::resolve_editor()?;
 
     let editor_status = process::Command::new(&editor)
         .arg(&note.note_path)
         .status()
-        .with_context(|| format!("failed to execute $EDITOR={editor}"))?;
+        .with_context(|| format!("failed to execute editor `{editor}`"))?;
 
     if editor_status.success() {
         // @TODO: this isn't strictly true, discarding changes with :q!
@@ -486,12 +486,12 @@ fn edit(note: EnrichedNoteArgs, create_flag: &bool) -> CommandResult {
         }
     }
 
-    let editor = env::var("EDITOR").context("$EDITOR not found")?;
+    let editor = cli_config::resolve_editor()?;
 
     let editor_status = process::Command::new(&editor)
         .arg(&note.note_path)
         .status()
-        .with_context(|| format!("failed to execute $EDITOR={editor}"))?;
+        .with_context(|| format!("failed to execute editor `{editor}`"))?;
 
     if editor_status.success() {
         // @TODO: this isn't strictly true, discarding changes with :q!

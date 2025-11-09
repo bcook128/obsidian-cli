@@ -24,7 +24,7 @@ Commands:
   open        Open a note in the Obsidian app
   uri         Print the Obsidian URI of a note
   create      Create a new note
-  edit        Open a note in your default editor ($EDITOR)
+  edit        Open a note in your configured editor
   path        Print the full file-path of the note
   properties  View the properties of a note
   help        Print this message or the help of the given subcommand(s)
@@ -41,7 +41,7 @@ Usage:
 
 > obx notes create new-note
 
-# Edit a note in $EDITOR
+# Edit a note in your configured editor (falls back to $EDITOR)
 > obx notes edit simple-note
 
 # Open the note in Obsidian.app
@@ -116,7 +116,27 @@ Options:
   -v, --vault <VAULT>  Override the active vault by name
 ```
 
-Inside the TUI you can navigate with the arrow keys, fold and unfold folders with ← →, switch panels with <kbd>Tab</kbd>, and quit with <kbd>q</kbd>.
+Inside the TUI you can navigate with the arrow keys, fold and unfold folders with ← →, switch panels with <kbd>Tab</kbd>, press <kbd>Enter</kbd> (or <kbd>e</kbd>/<kbd>o</kbd>) to open the selected note in your configured editor, and quit with <kbd>q</kbd>.
+
+## Configuration
+
+`obx` stores its configuration in `~/.config/obx/config.yml` (override with `OBX_CONFIG_DIR`). You can manage preferences directly from the CLI:
+
+```sh
+# Print the current configuration
+obx config print
+
+# Set or update the editor command used by `obx notes edit` and the TUI
+obx config set --editor "code --reuse-window"
+
+# Clear the editor preference to fall back to $EDITOR
+obx config set --clear-editor
+
+# Pick one of the built-in themes for the TUI
+obx config set --theme gruvbox-dark
+```
+
+Available themes: `obsidian-dark` (default), `obsidian-light`, `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light`.
 
 
 ### Roadmap
