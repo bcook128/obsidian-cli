@@ -24,13 +24,13 @@ serde_json = { version = "1.0.122", features = ["preserve_order"] }
 serde_yaml = { version = "0.9.34" }
 tabled = "0.16.0"
 walkdir = "2.5.0"
-libobsidian = "*"
+libobsidian = { path = "libobsidian" }
 ratatui = { version = "0.26.2", default-features = false, features = ["crossterm"] }
 crossterm = "0.27.0"
 chrono = { version = "0.4.38", default-features = false, features = ["clock"] }
 
 [patch.crates-io]
-libobsidian = { path = "../libobsidian" }
+libobsidian = { path = "./libobsidian" }
 
 [dev-dependencies]
 assert_cmd = "2.0.14"
