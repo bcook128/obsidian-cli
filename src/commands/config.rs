@@ -1,4 +1,4 @@
-use crate::{cli_config, util::CommandResult};
+use crate::{cli_config, theme::ThemeName, util::CommandResult};
 use anyhow::Context;
 use clap::{Args, Subcommand};
 
@@ -17,6 +17,9 @@ enum Subcommands {
 
     /// Print the absolute path to your config file
     Path,
+
+    /// Update editor or theme preferences
+    Set(SetArgs),
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -35,6 +38,7 @@ pub fn entry(cmd: &ConfigCommand) -> anyhow::Result<Option<String>> {
     match &cmd.command {
         Some(Subcommands::Print(PrintArgs { format })) => print(format),
         Some(Subcommands::Path) => path(),
+        Some(Subcommands::Set(args)) => set(args),
         None => todo!(),
     }
 }
@@ -57,4 +61,36 @@ fn path() -> CommandResult {
         .to_string();
 
     Ok(Some(config_path))
+}
+
+#[derive(Args, Debug, Clone)]
+struct SetArgs {
+    #[arg(long)]
+    editor: Option<String>,
+    #[arg(long, value_enum)]
+    theme: Option<ThemeName>,
+    #[arg(long, conflicts_with = "editor")]
+    clear_editor: bool,
+}
+
+fn set(args: &SetArgs) -> CommandResult {
+    if args.editor.is_none() && args.theme.is_none() && !args.clear_editor {
+        return Ok(Some("Nothing to update".to_string()));
+    }
+
+    let mut config = cli_config::read()?;
+
+    if args.clear_editor {
+        config.editor = None;
+    } else if let Some(editor) = &args.editor {
+        config.editor = Some(editor.clone());
+    }
+
+    if let Some(theme) = args.theme {
+        config.theme = theme;
+    }
+
+    cli_config::write(&config)?;
+
+    Ok(Some("Configuration updated".to_string()))
 }

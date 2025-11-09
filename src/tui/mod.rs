@@ -1,12 +1,14 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::stdout,
+    io::{stdout, Stdout},
     path::{Path, PathBuf},
+    process::Command,
     time::Duration,
 };
 
-use anyhow::{Context, Result};
+use crate::{cli_config, theme::Theme};
+use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Local};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
@@ -16,36 +18,13 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
-    prelude::{Color, Frame, Modifier, Style},
+    prelude::{Frame, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Terminal,
 };
 use serde_yaml::Value;
 use walkdir::WalkDir;
-
-#[derive(Debug, Clone)]
-pub struct Theme {
-    pub accent: Color,
-    pub background: Color,
-    pub folder: Color,
-    pub note: Color,
-    pub modified: Color,
-    pub tag: Color,
-}
-
-impl Default for Theme {
-    fn default() -> Self {
-        Self {
-            accent: Color::Magenta,
-            background: Color::Black,
-            folder: Color::Cyan,
-            note: Color::White,
-            modified: Color::Yellow,
-            tag: Color::DarkGray,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 struct FolderEntry {
@@ -95,9 +74,16 @@ impl Focus {
     }
 }
 
+enum AppAction {
+    Continue,
+    Quit,
+    Open { editor: String, note: PathBuf },
+}
+
 pub struct AppState {
     vault_path: PathBuf,
     theme: Theme,
+    editor_command: Option<String>,
     folders: Vec<FolderEntry>,
     folder_index: HashMap<PathBuf, usize>,
     expanded: HashSet<PathBuf>,
@@ -111,21 +97,14 @@ pub struct AppState {
 }
 
 impl AppState {
-    fn new(vault_path: PathBuf) -> Result<Self> {
-        let theme = Theme::default();
+    fn new(vault_path: PathBuf, theme: Theme, editor_command: Option<String>) -> Result<Self> {
         let folders = build_folder_entries(&vault_path)?;
         let mut folder_index = HashMap::new();
         for (idx, folder) in folders.iter().enumerate() {
             folder_index.insert(folder.path.clone(), idx);
         }
 
-        let mut expanded = HashSet::new();
-        if let Some(root) = folders.first() {
-            expanded.insert(root.path.clone());
-        }
-        for entry in folders.iter().filter(|f| f.depth <= 1) {
-            expanded.insert(entry.path.clone());
-        }
+        let expanded = initialize_expanded_folders(&folders, &vault_path);
 
         let selected_folder = folders
             .first()
@@ -144,6 +123,7 @@ impl AppState {
         let mut app = Self {
             vault_path,
             theme,
+            editor_command,
             folders,
             folder_index,
             expanded,
@@ -279,6 +259,49 @@ impl AppState {
         self.selected_note_entry().map(|note| note.path.clone())
     }
 
+    fn prepare_open_action(&mut self) -> Result<Option<AppAction>> {
+        let Some(path) = self.selected_note_path() else {
+            self.set_status("Select a note to open");
+            return Ok(None);
+        };
+
+        let editor = match self.editor_command.clone() {
+            Some(command) => command,
+            None => match cli_config::resolve_editor() {
+                Ok(command) => {
+                    self.editor_command = Some(command.clone());
+                    command
+                }
+                Err(err) => {
+                    self.set_status(err.to_string());
+                    return Ok(None);
+                }
+            },
+        };
+
+        Ok(Some(AppAction::Open { editor, note: path }))
+    }
+
+    fn refresh_after_external_edit(&mut self, note_path: &Path) -> Result<()> {
+        self.notes_cache.remove(&self.selected_folder);
+        ensure_notes_loaded(&mut self.notes_cache, &self.selected_folder)?;
+
+        if let Some(entries) = self.notes_cache.get(&self.selected_folder) {
+            if let Some(idx) = entries.iter().position(|note| note.path == note_path) {
+                self.selected_note = Some(idx);
+            } else if entries.is_empty() {
+                self.selected_note = None;
+            } else {
+                self.selected_note = Some(0);
+            }
+        } else {
+            self.selected_note = None;
+        }
+
+        self.refresh_note_preview();
+        Ok(())
+    }
+
     fn refresh_note_preview(&mut self) {
         if let Some(path) = self.selected_note_path() {
             match fs::read_to_string(&path) {
@@ -310,17 +333,17 @@ impl AppState {
             .map(|s| s.to_string())
             .unwrap_or_else(|| self.vault_path.to_string_lossy().into_owned());
         format!(
-            "Vault: {} • ↑/↓ navigate • ←/→ fold • Tab switch panel • q quit",
+            "Vault: {} • ↑/↓ navigate • ←/→ fold • Enter open • Tab switch panel • q quit",
             vault_name
         )
     }
 
-    fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
+    fn handle_key(&mut self, key: KeyEvent) -> Result<AppAction> {
         if key.kind != KeyEventKind::Press {
-            return Ok(false);
+            return Ok(AppAction::Continue);
         }
         match key.code {
-            KeyCode::Char('q') => return Ok(true),
+            KeyCode::Char('q') => return Ok(AppAction::Quit),
             KeyCode::Tab => {
                 self.focus = self.focus.next();
             }
@@ -362,12 +385,18 @@ impl AppState {
                     self.expand_selected_folder();
                     self.focus = Focus::Notes;
                 }
-                Focus::Notes => {
-                    self.focus = Focus::Viewer;
+                Focus::Notes | Focus::Viewer => {
+                    if let Some(action) = self.prepare_open_action()? {
+                        return Ok(action);
+                    }
                 }
-                Focus::Viewer => {}
             },
-            KeyCode::Char('n') | KeyCode::Char('e') | KeyCode::Char('o') | KeyCode::Char('d') => {
+            KeyCode::Char('e') | KeyCode::Char('o') => {
+                if let Some(action) = self.prepare_open_action()? {
+                    return Ok(action);
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('d') => {
                 self.set_status("Action not implemented yet");
             }
             KeyCode::Char('/') => {
@@ -379,8 +408,17 @@ impl AppState {
             }
             _ => {}
         }
-        Ok(false)
+        Ok(AppAction::Continue)
     }
+}
+
+fn initialize_expanded_folders(folders: &[FolderEntry], vault_path: &Path) -> HashSet<PathBuf> {
+    let mut expanded = HashSet::new();
+    expanded.insert(vault_path.to_path_buf());
+    for entry in folders.iter().filter(|entry| entry.depth <= 1) {
+        expanded.insert(entry.path.clone());
+    }
+    expanded
 }
 
 fn build_folder_entries(vault_path: &Path) -> Result<Vec<FolderEntry>> {
@@ -511,6 +549,11 @@ fn is_markdown(path: &Path) -> bool {
 }
 
 pub fn run(vault_path: PathBuf) -> Result<()> {
+    let (theme, editor_command) = match cli_config::read() {
+        Ok(cfg) => (cfg.theme.resolve(), cfg.editor.clone()),
+        Err(_) => (Theme::default(), None),
+    };
+
     enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -518,7 +561,7 @@ pub fn run(vault_path: PathBuf) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let res = run_app(&mut terminal, vault_path);
+    let res = run_app(&mut terminal, vault_path, theme, editor_command);
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
@@ -527,22 +570,46 @@ pub fn run(vault_path: PathBuf) -> Result<()> {
     res
 }
 
-fn run_app<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
+fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     vault_path: PathBuf,
+    theme: Theme,
+    editor_command: Option<String>,
 ) -> Result<()> {
-    let mut app = AppState::new(vault_path)?;
+    let mut app = AppState::new(vault_path, theme, editor_command)?;
 
     loop {
         terminal.draw(|f| draw(f, &app))?;
 
         if event::poll(Duration::from_millis(200))? {
             match event::read()? {
-                Event::Key(key) => {
-                    if app.handle_key(key)? {
-                        break;
+                Event::Key(key) => match app.handle_key(key)? {
+                    AppAction::Quit => break,
+                    AppAction::Continue => {}
+                    AppAction::Open { editor, note } => {
+                        suspend_terminal(terminal)?;
+                        let launch_result = launch_editor(&editor, &note);
+                        resume_terminal(terminal)?;
+
+                        match launch_result {
+                            Ok(()) => {
+                                if let Err(err) = app.refresh_after_external_edit(&note) {
+                                    app.set_status(err.to_string());
+                                } else {
+                                    let display = note
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .map(|s| s.to_string())
+                                        .unwrap_or_else(|| note.display().to_string());
+                                    app.set_status(format!("Opened {display} with {editor}"));
+                                }
+                            }
+                            Err(err) => {
+                                app.set_status(err.to_string());
+                            }
+                        }
                     }
-                }
+                },
                 Event::Resize(_, _) => {}
                 _ => {}
             }
@@ -550,6 +617,34 @@ fn run_app<B: ratatui::backend::Backend>(
     }
 
     Ok(())
+}
+
+fn suspend_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    Ok(())
+}
+
+fn resume_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    enable_raw_mode()?;
+    terminal.hide_cursor()?;
+    terminal.clear()?;
+    Ok(())
+}
+
+fn launch_editor(editor: &str, note: &Path) -> Result<()> {
+    let status = Command::new(editor)
+        .arg(note)
+        .status()
+        .with_context(|| format!("failed to execute editor `{editor}`"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!("Editor exited with status {status}"))
+    }
 }
 
 fn draw(frame: &mut Frame, app: &AppState) {
@@ -603,7 +698,7 @@ fn render_folders(frame: &mut Frame, area: Rect, app: &AppState) {
         let text = format!("{indent}{symbol}{}", folder.name);
         items.push(ListItem::new(Line::from(Span::styled(
             text,
-            Style::default().fg(theme.folder),
+            Style::default().fg(theme.folder).bg(theme.background),
         ))));
     }
 
@@ -614,12 +709,13 @@ fn render_folders(frame: &mut Frame, area: Rect, app: &AppState) {
 
     let highlight = Style::default()
         .fg(theme.accent)
+        .bg(theme.background)
         .add_modifier(Modifier::BOLD);
 
     let block_style = if app.focus == Focus::Folders {
-        Style::default().fg(theme.accent)
+        Style::default().fg(theme.accent).bg(theme.background)
     } else {
-        Style::default()
+        Style::default().bg(theme.background)
     };
 
     let list = List::new(items)
@@ -641,21 +737,30 @@ fn render_notes(frame: &mut Frame, area: Rect, app: &AppState) {
     for note in notes {
         let mut spans = vec![Span::styled(
             note.name.clone(),
-            Style::default().fg(theme.note),
+            Style::default().fg(theme.note).bg(theme.background),
         )];
         if let Some(modified) = note.formatted_modified() {
             spans.push(Span::raw("  "));
-            spans.push(Span::styled(modified, Style::default().fg(theme.modified)));
+            spans.push(Span::styled(
+                modified,
+                Style::default().fg(theme.modified).bg(theme.background),
+            ));
         }
         if !note.tags.is_empty() {
             let tag_text = format!("  #{}", note.tags.join(" #"));
-            spans.push(Span::styled(tag_text, Style::default().fg(theme.tag)));
+            spans.push(Span::styled(
+                tag_text,
+                Style::default().fg(theme.tag).bg(theme.background),
+            ));
         }
         items.push(ListItem::new(Line::from(spans)));
     }
 
     if items.is_empty() {
-        items.push(ListItem::new(Line::from("(no notes)")));
+        items.push(ListItem::new(Line::from(Span::styled(
+            "(no notes)",
+            Style::default().fg(theme.note).bg(theme.background),
+        ))));
     }
 
     let mut state = ListState::default();
@@ -665,12 +770,13 @@ fn render_notes(frame: &mut Frame, area: Rect, app: &AppState) {
 
     let highlight = Style::default()
         .fg(theme.accent)
+        .bg(theme.background)
         .add_modifier(Modifier::BOLD);
 
     let block_style = if app.focus == Focus::Notes {
-        Style::default().fg(theme.accent)
+        Style::default().fg(theme.accent).bg(theme.background)
     } else {
-        Style::default()
+        Style::default().bg(theme.background)
     };
 
     let list = List::new(items)
@@ -688,9 +794,9 @@ fn render_notes(frame: &mut Frame, area: Rect, app: &AppState) {
 fn render_viewer(frame: &mut Frame, area: Rect, app: &AppState) {
     let theme = &app.theme;
     let block_style = if app.focus == Focus::Viewer {
-        Style::default().fg(theme.accent)
+        Style::default().fg(theme.accent).bg(theme.background)
     } else {
-        Style::default()
+        Style::default().bg(theme.background)
     };
 
     let paragraph = Paragraph::new(app.note_preview.as_str())
@@ -700,13 +806,14 @@ fn render_viewer(frame: &mut Frame, area: Rect, app: &AppState) {
                 .title("Preview")
                 .style(block_style),
         )
-        .style(Style::default().fg(Color::White));
+        .style(Style::default().fg(theme.note).bg(theme.background));
 
     frame.render_widget(paragraph, area);
 }
 
 fn render_status(frame: &mut Frame, area: Rect, app: &AppState) {
     let theme = &app.theme;
-    let paragraph = Paragraph::new(app.status.as_str()).style(Style::default().fg(theme.note));
+    let paragraph = Paragraph::new(app.status.as_str())
+        .style(Style::default().fg(theme.note).bg(theme.background));
     frame.render_widget(paragraph, area);
 }
